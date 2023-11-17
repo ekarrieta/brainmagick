@@ -309,6 +309,212 @@ class Wav2VecChunk(_BaseWav2Vec):
         return wav
 
 
+class _BaseHubert(_BaseWav2Vec):
+    # The Hubert Base pretrained model from Hugging Face
+    model_name = "facebook/hubert-base-ls960"
+
+    @property
+    def model(self) -> tp.Any:
+        from transformers import HubertModel
+        if self.random:
+            return self._model_cache.get(self._get_random_model)
+        else:
+            # Load the HubertModel instead of Wav2Vec2Model
+            return self._model_cache.get(HubertModel.from_pretrained, self.model_name)
+
+    def _get_random_model(self):
+        from transformers import HubertModel, HubertConfig
+        # Use HubertConfig to configure the random model
+        config = HubertConfig.from_pretrained(self.model_name)
+        return HubertModel(config)
+
+    def _compute_hidden_states(
+            self, name: str, filepath: Path, start: float, stop: float,
+            layers: tp.Optional[tp.List[int]] = None) -> torch.Tensor:
+        input_values = self._preprocess_wav(filepath=filepath, start=start, stop=stop)
+
+        self.model.to(self.device)
+        self.model.eval()  # needs to be in eval mode
+        with torch.no_grad():
+            outputs = self.model(input_values.to(self.device), output_hidden_states=True)
+        out: tp.Any = outputs.get(name)
+        if isinstance(out, tuple):
+            out = torch.stack(out)
+        if layers is not None:
+            out = out[layers].mean(0)
+        return out.detach().cpu().clone().numpy()
+
+
+class HubertTransformer(_BaseHubert):
+    """Outputs the Hubert Base transformer layers"""
+    dimension = 768
+
+    def __init__(self, sample_rate: Frequency,
+                 normalized: bool = True,
+                 layers: tp.Tuple[int, ...] = (7, 8, 9),
+                 random: bool = False,
+                 device: str = "cpu") -> None:
+        super().__init__(sample_rate=sample_rate, normalized=normalized,
+                         device=device, random=random)
+        self.layers = layers
+
+    def get_on_overlap(self, event: events.Sound, overlap: events.DataSlice) -> torch.Tensor:
+        outputs = self._get_cached_tensor(
+            event, overlap=overlap,
+            name="hidden_states", layers=list(self.layers))
+        outputs = outputs[0].transpose(0, 1)  # [1, T, D] -> [T, D] -> [D, T]
+        return F.interpolate(outputs[None], overlap.duration_ind)[0]
+
+
+class HubertConvolution(_BaseHubert):
+    """Outputs the Hubert Base convolutional layers"""
+    event_kind = "sound"
+    dimension = 768
+
+    def get_on_overlap(self, event: events.Sound, overlap: events.DataSlice) -> torch.Tensor:
+        outputs = self._get_cached_tensor(event, overlap=overlap, name="last_hidden_state")
+        # [1, T, D] -> [T, D] -> [D, T]
+        outputs = outputs[0].transpose(0, 1)  # [1, T, D] -> [T, D] -> [D, T]
+        out = F.interpolate(outputs[None], overlap.duration_ind)[0]
+        return out
+
+
+class HubertChunk(_BaseHubert):
+    """Outputs a chunk of the waveform compatible to be an input of the Hubert Base Model"""
+
+    dimension = 1  # This may remain the same as it refers to raw waveforms
+    model_name = "facebook/hubert-large-ll60k"
+
+    def __init__(self, sample_rate: Frequency,
+                 normalized: bool = True,
+                 random: bool = False,
+                 device: str = "cpu") -> None:
+        # Forcing the SR to 16k for this feature (base::FeaturesBuilder()
+        # doesn't handle multiple SRs)
+        super().__init__(sample_rate=Frequency(16000), normalized=normalized,
+                         device=device, random=random)
+
+    @property
+    def feature_extractor(self) -> tp.Any:
+        from transformers import Wav2Vec2FeatureExtractor
+
+        return self._extractor_cache.get(
+            Wav2Vec2FeatureExtractor.from_pretrained, self.model_name
+        )
+
+    def get(self, event: events.Sound) -> torch.Tensor:
+        # Possible improv.: add cache here to read full .wav once (small time reduction expected)
+        wav = self._preprocess_wav(
+            filepath=event.filepath,
+            start=event.offset,
+            stop=event.offset + event.duration,
+        )
+        return wav
+
+
+class _BaseHubertLarge(_BaseWav2Vec):
+    # The Hubert Large pretrained model from Hugging Face
+    model_name = "facebook/hubert-large-ls960-ft"
+
+    @property
+    def model(self) -> tp.Any:
+        from transformers import HubertModel
+        if self.random:
+            return self._model_cache.get(self._get_random_model)
+        else:
+            # Load the HubertModel instead of Wav2Vec2Model
+            return self._model_cache.get(HubertModel.from_pretrained, self.model_name)
+
+    def _get_random_model(self):
+        from transformers import HubertModel, HubertConfig
+        # Use HubertConfig to configure the random model
+        config = HubertConfig.from_pretrained(self.model_name)
+        return HubertModel(config)
+
+    def _compute_hidden_states(
+            self, name: str, filepath: Path, start: float, stop: float,
+            layers: tp.Optional[tp.List[int]] = None) -> torch.Tensor:
+        input_values = self._preprocess_wav(filepath=filepath, start=start, stop=stop)
+
+        self.model.to(self.device)
+        self.model.eval()  # needs to be in eval mode
+        with torch.no_grad():
+            outputs = self.model(input_values.to(self.device), output_hidden_states=True)
+        out: tp.Any = outputs.get(name)
+        if isinstance(out, tuple):
+            out = torch.stack(out)
+        if layers is not None:
+            out = out[layers].mean(0)
+        return out.detach().cpu().clone().numpy()
+
+
+class HubertTransformerLarge(_BaseHubertLarge):
+    """Outputs the Hubert Large transformer layers"""
+    dimension = 1024
+
+    def __init__(self, sample_rate: Frequency,
+                 normalized: bool = True,
+                 layers: tp.Tuple[int, ...] = (14, 15, 16, 17, 18),
+                 random: bool = False,
+                 device: str = "cpu") -> None:
+        super().__init__(sample_rate=sample_rate, normalized=normalized,
+                         device=device, random=random)
+        self.layers = layers
+
+    def get_on_overlap(self, event: events.Sound, overlap: events.DataSlice) -> torch.Tensor:
+        outputs = self._get_cached_tensor(
+            event, overlap=overlap,
+            name="hidden_states", layers=list(self.layers))
+        outputs = outputs[0].transpose(0, 1)  # [1, T, D] -> [T, D] -> [D, T]
+        return F.interpolate(outputs[None], overlap.duration_ind)[0]
+
+
+class HubertConvolutionLarge(_BaseHubertLarge):
+    """Outputs the Hubert Large convolutional layers"""
+    event_kind = "sound"
+    dimension = 1024
+
+    def get_on_overlap(self, event: events.Sound, overlap: events.DataSlice) -> torch.Tensor:
+        outputs = self._get_cached_tensor(event, overlap=overlap, name="last_hidden_state")
+        # [1, T, D] -> [T, D] -> [D, T]
+        outputs = outputs[0].transpose(0, 1)  # [1, T, D] -> [T, D] -> [D, T]
+        out = F.interpolate(outputs[None], overlap.duration_ind)[0]
+        return out
+
+
+class HubertChunkLarge(_BaseHubertLarge):
+    """Outputs a chunk of the waveform compatible to be an input of the Hubert Large Model"""
+
+    dimension = 1  # This may remain the same as it refers to raw waveforms
+    model_name = "facebook/hubert-large-ls960-ft"
+
+    def __init__(self, sample_rate: Frequency,
+                 normalized: bool = True,
+                 random: bool = False,
+                 device: str = "cpu") -> None:
+        # Forcing the SR to 16k for this feature (base::FeaturesBuilder()
+        # doesn't handle multiple SRs)
+        super().__init__(sample_rate=Frequency(16000), normalized=normalized,
+                         device=device, random=random)
+
+    @property
+    def feature_extractor(self) -> tp.Any:
+        from transformers import Wav2Vec2FeatureExtractor
+
+        return self._extractor_cache.get(
+            Wav2Vec2FeatureExtractor.from_pretrained, self.model_name
+        )
+
+    def get(self, event: events.Sound) -> torch.Tensor:
+        # Possible improv.: add cache here to read full .wav once (small time reduction expected)
+        wav = self._preprocess_wav(
+            filepath=event.filepath,
+            start=event.offset,
+            stop=event.offset + event.duration,
+        )
+        return wav
+
+
 def _extract_wav_part(
     filepath: Union[Path, str], onset: float, offset: float
 ) -> tp.Tuple[torch.Tensor, Frequency]:

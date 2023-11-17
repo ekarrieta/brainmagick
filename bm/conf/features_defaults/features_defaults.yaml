@@ -28,3 +28,15 @@ dset:
       random: false
     Wav2VecChunk:
       device: cpu
+    HubertTransformer:
+      layers: [7, 8, 9]
+      device: cpu
+      random: false
+    HubertTransformerLarge:
+      layers: [14, 15, 16, 17, 18]
+      device: cpu
+      random: false
+    HubertChunk:
+      device: cpu
+    HubertChunkLarge:
+      device: cpu
