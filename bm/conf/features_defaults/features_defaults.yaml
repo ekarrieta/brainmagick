@@ -36,7 +36,7 @@ dset:
       layers: [14, 15, 16, 17, 18]
       device: cpu
       random: false
-    HubertTransformerLarge:
+    HubertTransformerXLarge:
       layers: [28, 30, 32, 34, 36]
       device: cpu
       random: false

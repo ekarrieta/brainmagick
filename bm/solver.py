@@ -302,7 +302,7 @@ class Solver(flashy.BaseSolver):
         features_mask = features_mask[..., limit:]
 
         if self.feature_model is not None:
-            if args.feature_model_name.lower() in ["wav2vec2", "hubert"]:
+            if args.feature_model_name.lower() in ["wav2vec2", "hubert", "hubertlarge", "hubertxlarge"]:
                 # In case multi GPUs: Move "output" on the same device as the feature model
                 output = output.to(self.feature_model.device)
 
