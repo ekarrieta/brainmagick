@@ -46,3 +46,21 @@ dset:
       device: cpu
     HubertChunkXLarge:
       device: cpu
+    XLSRTransformer300m:
+      layers: [14, 15, 16, 17, 18]
+      device: cpu
+      random: false
+    XLSRChunk300m:
+      device: cpu
+    XLSRTransformer1b:
+      layers: [28, 30, 32, 34, 36]
+      device: cpu
+      random: false
+    XLSRChunk1b:
+      device: cpu
+    XLSRTransformer2b:
+      layers: [28, 30, 32, 34, 36]
+      device: cpu
+      random: false
+    XLSRChunk2b:
+      device: cpu

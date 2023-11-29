@@ -618,6 +618,309 @@ class HubertChunkXLarge(_BaseHubertXLarge):
         return wav
 
 
+class _BaseXLSR300m(_BaseWav2Vec):
+    # The XLS-R 300m pretrained model from Hugging Face
+    model_name = "facebook/wav2vec2-xls-r-300m"
+
+    @property
+    def model(self) -> tp.Any:
+        from transformers import Wav2Vec2Model
+        if self.random:
+            return self._model_cache.get(self._get_random_model)
+        else:
+            return self._model_cache.get(Wav2Vec2Model.from_pretrained, self.model_name)
+
+    def _get_random_model(self):
+        from transformers import Wav2Vec2Model, Wav2Vec2Config
+        config = Wav2Vec2Config.from_pretrained(self.model_name)
+        return Wav2Vec2Model(config)
+
+    def _compute_hidden_states(
+            self, name: str, filepath: Path, start: float, stop: float,
+            layers: tp.Optional[tp.List[int]] = None) -> torch.Tensor:
+        input_values = self._preprocess_wav(filepath=filepath, start=start, stop=stop)
+
+        self.model.to(self.device)
+        self.model.eval()  # needs to be in eval mode
+        with torch.no_grad():
+            outputs = self.model(input_values.to(self.device), output_hidden_states=True)
+        out: tp.Any = outputs.get(name)
+        if isinstance(out, tuple):
+            out = torch.stack(out)
+        if layers is not None:
+            out = out[layers].mean(0)
+        return out.detach().cpu().clone().numpy()
+
+
+class XLSRTransformer300m(_BaseXLSR300m):
+    """Outputs the XLS-R 300m transformer layers"""
+    dimension = 1024
+
+    def __init__(self, sample_rate: Frequency,
+                 normalized: bool = True,
+                 layers: tp.Tuple[int, ...] = (14, 15, 16, 17, 18),
+                 random: bool = False,
+                 device: str = "cpu") -> None:
+        super().__init__(sample_rate=sample_rate, normalized=normalized,
+                         device=device, random=random)
+        self.layers = layers
+
+    def get_on_overlap(self, event: events.Sound, overlap: events.DataSlice) -> torch.Tensor:
+        outputs = self._get_cached_tensor(
+            event, overlap=overlap,
+            name="hidden_states", layers=list(self.layers))
+        outputs = outputs[0].transpose(0, 1)  # [1, T, D] -> [T, D] -> [D, T]
+        return F.interpolate(outputs[None], overlap.duration_ind)[0]
+
+
+class XLSRConvolution300m(_BaseXLSR300m):
+    """Outputs the XLS-R 300m convolutional layers"""
+    event_kind = "sound"
+    dimension = 1024
+
+    def get_on_overlap(self, event: events.Sound, overlap: events.DataSlice) -> torch.Tensor:
+        outputs = self._get_cached_tensor(event, overlap=overlap, name="last_hidden_state")
+        # [1, T, D] -> [T, D] -> [D, T]
+        outputs = outputs[0].transpose(0, 1)  # [1, T, D] -> [T, D] -> [D, T]
+        out = F.interpolate(outputs[None], overlap.duration_ind)[0]
+        return out
+
+
+class XLSRChunk300m(_BaseXLSR300m):
+    """Outputs a chunk of the waveform compatible to be an input of the XLS-R 300m Model"""
+
+    dimension = 1  # This may remain the same as it refers to raw waveforms
+    model_name = "facebook/wav2vec2-xls-r-300m"
+
+    def __init__(self, sample_rate: Frequency,
+                 normalized: bool = True,
+                 random: bool = False,
+                 device: str = "cpu") -> None:
+        # Forcing the SR to 16k for this feature (base::FeaturesBuilder()
+        # doesn't handle multiple SRs)
+        super().__init__(sample_rate=Frequency(16000), normalized=normalized,
+                         device=device, random=random)
+
+    @property
+    def feature_extractor(self) -> tp.Any:
+        from transformers import Wav2Vec2FeatureExtractor
+
+        return self._extractor_cache.get(
+            Wav2Vec2FeatureExtractor.from_pretrained, self.model_name
+        )
+
+    def get(self, event: events.Sound) -> torch.Tensor:
+        # Possible improv.: add cache here to read full .wav once (small time reduction expected)
+        wav = self._preprocess_wav(
+            filepath=event.filepath,
+            start=event.offset,
+            stop=event.offset + event.duration,
+        )
+        return wav
+
+
+class _BaseXLSR1b(_BaseWav2Vec):
+    # The XLS-R 1b pretrained model from Hugging Face
+    model_name = "facebook/wav2vec2-xls-r-1b"
+
+    @property
+    def model(self) -> tp.Any:
+        from transformers import Wav2Vec2Model
+        if self.random:
+            return self._model_cache.get(self._get_random_model)
+        else:
+            return self._model_cache.get(Wav2Vec2Model.from_pretrained, self.model_name)
+
+    def _get_random_model(self):
+        from transformers import Wav2Vec2Model, Wav2Vec2Config
+        config = Wav2Vec2Config.from_pretrained(self.model_name)
+        return Wav2Vec2Model(config)
+
+    def _compute_hidden_states(
+            self, name: str, filepath: Path, start: float, stop: float,
+            layers: tp.Optional[tp.List[int]] = None) -> torch.Tensor:
+        input_values = self._preprocess_wav(filepath=filepath, start=start, stop=stop)
+
+        self.model.to(self.device)
+        self.model.eval()  # needs to be in eval mode
+        with torch.no_grad():
+            outputs = self.model(input_values.to(self.device), output_hidden_states=True)
+        out: tp.Any = outputs.get(name)
+        if isinstance(out, tuple):
+            out = torch.stack(out)
+        if layers is not None:
+            out = out[layers].mean(0)
+        return out.detach().cpu().clone().numpy()
+
+
+class XLSRTransformer1b(_BaseXLSR1b):
+    """Outputs the XLS-R 1b transformer layers"""
+    dimension = 1280
+
+    def __init__(self, sample_rate: Frequency,
+                 normalized: bool = True,
+                 layers: tp.Tuple[int, ...] = (28, 30, 32, 34, 36),
+                 random: bool = False,
+                 device: str = "cpu") -> None:
+        super().__init__(sample_rate=sample_rate, normalized=normalized,
+                         device=device, random=random)
+        self.layers = layers
+
+    def get_on_overlap(self, event: events.Sound, overlap: events.DataSlice) -> torch.Tensor:
+        outputs = self._get_cached_tensor(
+            event, overlap=overlap,
+            name="hidden_states", layers=list(self.layers))
+        outputs = outputs[0].transpose(0, 1)  # [1, T, D] -> [T, D] -> [D, T]
+        return F.interpolate(outputs[None], overlap.duration_ind)[0]
+
+
+class XLSRConvolution1b(_BaseXLSR1b):
+    """Outputs the XLS-R 1b convolutional layers"""
+    event_kind = "sound"
+    dimension = 1280
+
+    def get_on_overlap(self, event: events.Sound, overlap: events.DataSlice) -> torch.Tensor:
+        outputs = self._get_cached_tensor(event, overlap=overlap, name="last_hidden_state")
+        # [1, T, D] -> [T, D] -> [D, T]
+        outputs = outputs[0].transpose(0, 1)  # [1, T, D] -> [T, D] -> [D, T]
+        out = F.interpolate(outputs[None], overlap.duration_ind)[0]
+        return out
+
+
+class XLSRChunk1b(_BaseXLSR1b):
+    """Outputs a chunk of the waveform compatible to be an input of the XLS-R 1b Model"""
+
+    dimension = 1  # This may remain the same as it refers to raw waveforms
+    model_name = "facebook/wav2vec2-xls-r-1b"
+
+    def __init__(self, sample_rate: Frequency,
+                 normalized: bool = True,
+                 random: bool = False,
+                 device: str = "cpu") -> None:
+        # Forcing the SR to 16k for this feature (base::FeaturesBuilder()
+        # doesn't handle multiple SRs)
+        super().__init__(sample_rate=Frequency(16000), normalized=normalized,
+                         device=device, random=random)
+
+    @property
+    def feature_extractor(self) -> tp.Any:
+        from transformers import Wav2Vec2FeatureExtractor
+
+        return self._extractor_cache.get(
+            Wav2Vec2FeatureExtractor.from_pretrained, self.model_name
+        )
+
+    def get(self, event: events.Sound) -> torch.Tensor:
+        # Possible improv.: add cache here to read full .wav once (small time reduction expected)
+        wav = self._preprocess_wav(
+            filepath=event.filepath,
+            start=event.offset,
+            stop=event.offset + event.duration,
+        )
+        return wav
+
+
+class _BaseXLSR2b(_BaseWav2Vec):
+    # The XLS-R 2b pretrained model from Hugging Face
+    model_name = "facebook/wav2vec2-xls-r-2b"
+
+    @property
+    def model(self) -> tp.Any:
+        from transformers import Wav2Vec2Model
+        if self.random:
+            return self._model_cache.get(self._get_random_model)
+        else:
+            return self._model_cache.get(Wav2Vec2Model.from_pretrained, self.model_name)
+
+    def _get_random_model(self):
+        from transformers import Wav2Vec2Model, Wav2Vec2Config
+        config = Wav2Vec2Config.from_pretrained(self.model_name)
+        return Wav2Vec2Model(config)
+
+    def _compute_hidden_states(
+            self, name: str, filepath: Path, start: float, stop: float,
+            layers: tp.Optional[tp.List[int]] = None) -> torch.Tensor:
+        input_values = self._preprocess_wav(filepath=filepath, start=start, stop=stop)
+
+        self.model.to(self.device)
+        self.model.eval()  # needs to be in eval mode
+        with torch.no_grad():
+            outputs = self.model(input_values.to(self.device), output_hidden_states=True)
+        out: tp.Any = outputs.get(name)
+        if isinstance(out, tuple):
+            out = torch.stack(out)
+        if layers is not None:
+            out = out[layers].mean(0)
+        return out.detach().cpu().clone().numpy()
+
+
+class XLSRTransformer2b(_BaseXLSR2b):
+    """Outputs the XLS-R 2b transformer layers"""
+    dimension = 1920
+
+    def __init__(self, sample_rate: Frequency,
+                 normalized: bool = True,
+                 layers: tp.Tuple[int, ...] = (28, 30, 32, 34, 36),
+                 random: bool = False,
+                 device: str = "cpu") -> None:
+        super().__init__(sample_rate=sample_rate, normalized=normalized,
+                         device=device, random=random)
+        self.layers = layers
+
+    def get_on_overlap(self, event: events.Sound, overlap: events.DataSlice) -> torch.Tensor:
+        outputs = self._get_cached_tensor(
+            event, overlap=overlap,
+            name="hidden_states", layers=list(self.layers))
+        outputs = outputs[0].transpose(0, 1)  # [1, T, D] -> [T, D] -> [D, T]
+        return F.interpolate(outputs[None], overlap.duration_ind)[0]
+
+
+class XLSRConvolution2b(_BaseXLSR2b):
+    """Outputs the XLS-R 2b convolutional layers"""
+    event_kind = "sound"
+    dimension = 1920
+
+    def get_on_overlap(self, event: events.Sound, overlap: events.DataSlice) -> torch.Tensor:
+        outputs = self._get_cached_tensor(event, overlap=overlap, name="last_hidden_state")
+        # [1, T, D] -> [T, D] -> [D, T]
+        outputs = outputs[0].transpose(0, 1)  # [1, T, D] -> [T, D] -> [D, T]
+        out = F.interpolate(outputs[None], overlap.duration_ind)[0]
+        return out
+
+
+class XLSRChunk2b(_BaseXLSR2b):
+    """Outputs a chunk of the waveform compatible to be an input of the XLS-R 2b Model"""
+
+    dimension = 1  # This may remain the same as it refers to raw waveforms
+    model_name = "facebook/wav2vec2-xls-r-2b"
+
+    def __init__(self, sample_rate: Frequency,
+                 normalized: bool = True,
+                 random: bool = False,
+                 device: str = "cpu") -> None:
+        # Forcing the SR to 16k for this feature (base::FeaturesBuilder()
+        # doesn't handle multiple SRs)
+        super().__init__(sample_rate=Frequency(16000), normalized=normalized,
+                         device=device, random=random)
+
+    @property
+    def feature_extractor(self) -> tp.Any:
+        from transformers import Wav2Vec2FeatureExtractor
+
+        return self._extractor_cache.get(
+            Wav2Vec2FeatureExtractor.from_pretrained, self.model_name
+        )
+
+    def get(self, event: events.Sound) -> torch.Tensor:
+        # Possible improv.: add cache here to read full .wav once (small time reduction expected)
+        wav = self._preprocess_wav(
+            filepath=event.filepath,
+            start=event.offset,
+            stop=event.offset + event.duration,
+        )
+        return wav
+
+
 def _extract_wav_part(
     filepath: Union[Path, str], onset: float, offset: float
 ) -> tp.Tuple[torch.Tensor, Frequency]:
