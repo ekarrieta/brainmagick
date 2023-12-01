@@ -40,11 +40,17 @@ dset:
       layers: [28, 30, 32, 34, 36]
       device: cpu
       random: false
+    HubertTransformerXLargeFT_LS960:
+      layers: [28, 30, 32, 34, 36]
+      device: cpu
+      random: false
     HubertChunk:
       device: cpu
     HubertChunkLarge:
       device: cpu
     HubertChunkXLarge:
+      device: cpu
+    HubertChunkXLargeFT_LS960:
       device: cpu
     XLSRTransformer300m:
       layers: [14, 15, 16, 17, 18]

@@ -240,6 +240,25 @@ def test_hubert_xlarge(cls, tmp_path: Path) -> None:
         assert out.shape == (feature.dimension, 100)
 
 
+@pytest.mark.parametrize("cls", [audio.HubertConvolutionXLargeFT_LS960, audio.HubertTransformerXLargeFT_LS960])
+def test_hubert_xlarge_ft_ls960(cls, tmp_path: Path) -> None:
+    if os.environ.get("CIRCLECI", ""):
+        pytest.skip("Models do not run in the CI")
+    wavpath = str(Path(__file__).parent.parent / "mockdata" / "one_two.wav")
+    event = events.Sound(start=1, duration=1, filepath=wavpath, modality=None, language=None)
+    overlap = events.DataSlice(
+        start=event.start + 0.1, duration=1.0, sample_rate=100, modality=None, language=None)
+    with env.temporary(cache=tmp_path):
+        feature = cls(sample_rate=Frequency(100))
+        feature.get_on_overlap(event, overlap)
+        caches = list(tmp_path.iterdir())
+        assert len(caches) == 1
+        # reload (expected to use the cache)
+        out = feature.get_on_overlap(event, overlap)
+        assert isinstance(out, torch.Tensor)
+        assert out.shape == (feature.dimension, 100)
+
+
 @pytest.mark.parametrize("cls", [audio.XLSRConvolution300m, audio.XLSRTransformer300m])
 def test_xlsr_300m(cls, tmp_path: Path) -> None:
     if os.environ.get("CIRCLECI", ""):

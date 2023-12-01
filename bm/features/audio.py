@@ -618,6 +618,26 @@ class HubertChunkXLarge(_BaseHubertXLarge):
         return wav
 
 
+class _BaseHubertXLargeFT_LS960(_BaseHubertXLarge):
+    # The Hubert X-Large fientuned in Librispeech model from Hugging Face
+    model_name = "facebook/hubert-xlarge-ls960-ft"
+
+
+class HubertTransformerXLargeFT_LS960(HubertTransformerXLarge):
+    """Outputs the Hubert XLarge FT Librispeech transformer layers"""
+
+
+class HubertConvolutionXLargeFT_LS960(HubertConvolutionXLarge):
+    """Outputs the Hubert XLarge FT Librispeech convolutional layers"""
+
+
+class HubertChunkXLargeFT_LS960(HubertChunkXLarge):
+    """Outputs a chunk of the waveform compatible to be an input of the Hubert
+    XLarge FT Librispeech Model
+    """
+    model_name = "facebook/hubert-xlarge-ls960-ft"
+
+
 class _BaseXLSR300m(_BaseWav2Vec):
     # The XLS-R 300m pretrained model from Hugging Face
     model_name = "facebook/wav2vec2-xls-r-300m"
