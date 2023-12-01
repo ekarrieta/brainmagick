@@ -1022,6 +1022,26 @@ class WavLMBaseChunk(_BaseWavLMBase):
         return wav
 
 
+class _BaseWavLMBasePlus(_BaseWavLMBase):
+    #  The WavLM Base Plus from Hugging Face
+    model_name = "microsoft/wavlm-base-plus"
+
+
+class WavLMBasePlusTransformer(WavLMBaseTransformer):
+    """Outputs the WavLM Base Plus transformer layers"""
+
+
+class WavLMBasePlusConvolution(WavLMBaseConvolution):
+    """Outputs the WavLM Base Plus convolutional layers"""
+
+
+class WavLMBasePlusChunk(WavLMBaseChunk):
+    """Outputs a chunk of the waveform compatible to be an input of the WavLM
+    Base Plus
+    """
+    model_name = "microsoft/wavlm-base-plus"
+
+
 class _BaseWavLMLarge(_BaseWav2Vec):
     # The WavLM Base pretrained model from Hugging Face
     model_name = "microsoft/wavlm-large"

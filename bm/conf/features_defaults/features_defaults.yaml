@@ -70,6 +70,12 @@ dset:
       random: false
     WavLMBaseChunk:
       device: cpu
+    WavLMBasePlusTransformer:
+      layers: [7, 8, 9]
+      device: cpu
+      random: false
+    WavLMBasePlusChunk:
+      device: cpu
     WavLMLargeTransformer:
       layers: [14, 15, 16, 17, 18]
       device: cpu
