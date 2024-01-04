@@ -18,3 +18,17 @@ fake:
   study: fake
 brennan2019:
   study: brennan2019
+bourguignon2020:
+  study: bourguignon2020
+bourguignon2020_listen:
+  study: bourguignon2020
+  modality: listen
+bourguignon2020_playback:
+  study: bourguignon2020
+  modality: playback
+bourguignon2020_self:
+  study: bourguignon2020
+  modality: self
+bourguignon2020_listen_playback:
+  study: bourguignon2020
+  modality: listen_playback

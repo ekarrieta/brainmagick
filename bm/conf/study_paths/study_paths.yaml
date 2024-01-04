@@ -4,4 +4,5 @@ default:
   schoffelen2019: ./data/schoffelen2019/
   brennan2019: ./data/brennan2019/
   broderick2019: ./data/broderick2019/
+  bourguignon2020: ./data/bourguignon2020/
 # Add more hostnames below
