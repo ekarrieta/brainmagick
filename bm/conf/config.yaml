@@ -70,6 +70,12 @@ test:
   wer_recordings: 40       # allows to compute the WER on the first N recordings.
   wer_study:
 
+attn:
+  use_bendr: true  # use BENDR in the model.
+  num_heads: 1
+  encoder_weights: ./models/BENDR/encoder.pt
+  context_weights: ./models/BENDR/contextualizer.pt
+
 dset:
   selections:
     - gwilliams2022

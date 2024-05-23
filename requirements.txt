@@ -32,3 +32,4 @@ flashy
 transformers >= 4.15.0 # for BERT and Wav2Vec embeddings
 pyyaml
 autoreject
+parse

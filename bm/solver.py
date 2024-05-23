@@ -4,6 +4,7 @@
 # This source code is licensed under the license found in the
 # LICENSE file in the root directory of this source tree.
 
+import os
 import logging
 import typing as tp
 from functools import partial
@@ -23,7 +24,101 @@ from .norm import BatchScaler, ScaleReject
 from .svd import svd_penalty
 from .utils import bold, copy_state, swap_state
 
+from .BENDR.dn3_ext_mh import ConvEncoderBENDR, BENDRContextualizer
+from .BENDR.transforms_instance_mh import To1020
+
 logger = logging.getLogger(__name__)
+
+
+# Mapping of Brennan 2019 channels to UI 10/20 channels used in BENDR
+brennan_to_ui1020_indices = [
+    49, 35,  # FP1, FP2
+    32, 21,  # F3, F4
+    16, 10,  # C3, C4
+    28, 25,  # P3, P4
+    43, 41,  # O1, O2
+    48, 36,  # F7, F8
+    46, 38,  # T3/T7, T4/T8
+    44, 40,  # T5/P7, T6/P8
+    7, 0, 13,  # Fz, Cz, Pz
+]
+
+
+def resample_data(x, original_freq, target_freq):
+    """Resample the time series data to a new frequency.
+
+    Parameters:
+        x (torch.Tensor): Input data of shape (batch_size, channels, time_steps).
+        original_freq (int): The original sampling frequency of the data.
+        target_freq (int): The desired sampling frequency.
+
+    Returns:
+        torch.Tensor: Resampled data.
+    """
+    current_steps = x.shape[-1]
+    new_steps = int(current_steps * (target_freq / original_freq))
+    # Resample using linear interpolation
+    x_resampled = F.interpolate(x, size=new_steps, mode='linear', align_corners=False)
+    return x_resampled
+
+
+def normalize_and_add_scale_channel(x, dataset_min, dataset_max):
+    """Normalizes the data to the range [-1, 1] and adds a scaling channel.
+
+    Parameters:
+        x: Input data tensor of shape (batch_size, channels, time_steps).
+        dataset_min: Minimum value across the entire dataset.
+        dataset_max: Maximum value across the entire dataset.
+    """
+    # Normalize each sequence to the range [-1, 1]
+    sequence_min = x.min(dim=2, keepdim=True)[0]
+    sequence_max = x.max(dim=2, keepdim=True)[0]
+    range_seq = sequence_max - sequence_min
+    normalized_x = 2 * (x - sequence_min) / range_seq - 1
+
+    # Calculate the relative amplitude scale for each sequence
+    relative_scale = (sequence_max - sequence_min) / (dataset_max - dataset_min)
+    relative_scale_channel = relative_scale.expand(-1, -1, x.size(2))
+
+    # Concatenate the relative amplitude channel
+    output = torch.cat([normalized_x, relative_scale_channel], dim=1)
+    return output
+
+
+def bendr_model(encoder_weights_path, context_weights_path, device):
+    main_dir = os.path.join(os.path.dirname(__file__), "..")
+
+    # Initialize the encoder part
+    encoder = ConvEncoderBENDR(in_features=20, encoder_h=512)
+    encoder.load_state_dict(torch.load(
+        os.path.join(main_dir, encoder_weights_path)
+    ))
+    encoder.eval()
+    encoder = encoder.to(device)
+
+    # Initialize the contextualizer part
+    contextualizer = BENDRContextualizer(
+        in_features=encoder.encoder_h, hidden_feedforward=3076, layers=8
+    )
+    contextualizer.load_state_dict(torch.load(
+        os.path.join(main_dir, context_weights_path)
+    ))
+    contextualizer.eval()
+    contextualizer = contextualizer.to(device)
+
+    return encoder, contextualizer
+
+
+def get_bendr_embeddings(encoder, contextualizer, x):
+    """Given an encoder and contextualizer, process the input `x` to get BENDR
+    embeddings.
+
+    Assumes `x` is a properly formatted batch tensor.
+    """
+    with torch.no_grad():
+        encoded = encoder(x)  # Process input through the encoder
+        context = contextualizer(encoded)  # Further process encoded features through the contextualizer
+    return context  # This tensor contains the embeddings
 
 
 class Solver(flashy.BaseSolver):
@@ -40,6 +135,12 @@ class Solver(flashy.BaseSolver):
         self.best_state: tp.Optional[dict] = None
         self.best_state_loss: tp.Optional[dict] = None
         self.loss = self._create_loss(args.optim.loss).to(self.device)
+
+        # BENDR model
+        self.bendr_encoder, self.bendr_contextualizer = bendr_model(
+            self.args.attn.encoder_weights, self.args.attn.context_weights,
+            self.device
+        )
 
         # Scalers
         self.scaler: tp.Optional[BatchScaler] = None
@@ -232,6 +333,7 @@ class Solver(flashy.BaseSolver):
         Runs model with a batch of data. Supports both the encoder and decoder tasks.
 
         Args:
+            batch: data for processing
             training - whether to run this method in training mode (perform data augmentation, etc)
         Returns:
             tuple containing the estimated of the model and ground-truth output.
@@ -294,7 +396,34 @@ class Solver(flashy.BaseSolver):
         else:
             assert False, f"Unknown task {task.type}"
 
-        estimate = self.model(inputs, batch)
+        bendr_inputs = inputs["meg"]
+
+        # Resample the data from 500 Hz to 256 Hz
+        bendr_inputs = resample_data(
+            bendr_inputs, original_freq=500, target_freq=256
+        )
+
+        # Select appropriate channels based on the predefined mapping
+        # bendr_inputs = inputs["meg"][:, :20, :].to(meg)
+        bendr_inputs = bendr_inputs[:, brennan_to_ui1020_indices, :]
+
+        # Add a zero-filled channel to make up for the missing reference channel
+        batch_size, _, time_steps = bendr_inputs.shape
+        zero_channel = torch.ones(
+            batch_size, 1, time_steps,
+            device=bendr_inputs.device, dtype=bendr_inputs.dtype
+        )
+        bendr_inputs = torch.cat((bendr_inputs, zero_channel), dim=1)
+        # TODO: scale the values and create the relative amplitude channel
+
+
+        # Retrieve BENDR embeddings, assumed to be provided in the batch or computed here
+        bendr_embeddings = get_bendr_embeddings(
+            self.bendr_encoder, self.bendr_contextualizer, bendr_inputs
+        )
+
+        # Pass BENDR embeddings along with other inputs to the model
+        estimate = self.model(inputs, batch, bendr_embeddings)
 
         # We remove the initial part of the signal, to prevent learning there.
         estimate = estimate[..., limit:]

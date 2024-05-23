@@ -7,6 +7,7 @@
 from functools import partial
 import random
 import typing as tp
+import logging
 
 import torch
 from torch import nn
@@ -18,6 +19,8 @@ from .common import (
     DualPathRNN, ChannelMerger, ChannelDropout, pad_multiple
 )
 
+logger = logging.getLogger(__name__)
+
 
 class SimpleConv(nn.Module):
     def __init__(self,
@@ -25,6 +28,10 @@ class SimpleConv(nn.Module):
                  in_channels: tp.Dict[str, int],
                  out_channels: int,
                  hidden: tp.Dict[str, int],
+                 # Attention
+                 use_bendr: bool = True,  # new parameter to toggle the use of BENDR embeddings
+                 bendr_dim: int = 512,     # assuming dimensionality of BENDR embeddings
+                 attn_num_heads: int = 2,  # number of attention heads
                  # Overall structure
                  depth: int = 4,
                  concatenate: bool = False,  # concatenate the inputs
@@ -195,7 +202,18 @@ class SimpleConv(nn.Module):
         self.encoders = nn.ModuleDict({name: ConvSequence(channels, **params)
                                        for name, channels in sizes.items()})
 
-    def forward(self, inputs, batch):
+        # initialize the attention mechanism if required
+        self.bendr_attn = None
+        if use_bendr:
+            logger.info("Using BENDR embeddings")
+            # TODO: adjust the 320 to be data independent
+            self.key_proj = nn.Linear(bendr_dim, 320)
+            self.value_proj = nn.Linear(bendr_dim, 320)
+            self.bendr_attn = nn.MultiheadAttention(
+                embed_dim=320, num_heads=attn_num_heads, batch_first=True
+            )
+
+    def forward(self, inputs, batch, bendr_embeddings=None):
         subjects = batch.subject_index
         length = next(iter(inputs.values())).shape[-1]  # length of any of the inputs
 
@@ -243,6 +261,26 @@ class SimpleConv(nn.Module):
         x = torch.cat(inputs, dim=1)
         if self.dual_path is not None:
             x = self.dual_path(x)
+
+        # Attention module processing with BENDR embeddings
+        if self.bendr_attn is not None and bendr_embeddings is not None:
+            # TODO: Ensure bendr_embeddings is in the correct shape: [batch_size, sequence_length, features]
+            # Assume bendr_embeddings is in shape [batch_size, features, sequence_length]
+            bendr_embeddings = bendr_embeddings.transpose(1, 2)  # transpose to [batch_size, sequence_length, features]
+            # Transpose MEG/EEG processed signals to match the shape [batch_size, sequence_length, features]
+            processed_signals = x.transpose(1, 2)  # transpose to [batch_size, sequence_length, features]
+
+            # Apply attention: query = processed_signals, key = value = bendr_embeddings
+            # query = self.query_proj(processed_signals)
+            query = processed_signals
+            key = self.key_proj(bendr_embeddings)
+            value = self.value_proj(bendr_embeddings)
+            attn_output, _ = self.bendr_attn(query=query, key=key, value=value)
+            # TODO: We may choose to concatenate or replace the existing signals with the attention output
+            # Here I replace processed signals with attention output
+            attn_output = attn_output.transpose(1, 2)  # transpose back to [batch_size, features, sequence_length]
+            x = attn_output
+
         if self.final is not None:
             x = self.final(x)
         assert x.shape[-1] >= length
