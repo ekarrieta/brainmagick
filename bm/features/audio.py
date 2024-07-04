@@ -309,6 +309,188 @@ class Wav2VecChunk(_BaseWav2Vec):
         return wav
 
 
+class _BaseWav2VecBert2(base.Feature, CaptureInit):
+    """
+    Parent class for Wav2VecBert2Transformera and Wav2VecBert2Convolution
+    """
+
+    event_kind = "sound"
+    model_name = "facebook/w2v-bert-2.0"
+
+    def __init__(self, sample_rate: Frequency,
+                 normalized: bool = True, random: bool = False,
+                 device: str = "cpu") -> None:
+        super().__init__(sample_rate)
+        args: tp.Any = self.model_name
+        if random:
+            args = (self.model_name, random)
+        self.cache = Cache("Wav2VecBert2Embedding", args, mode="memmap")
+        self.normalized = normalized
+        self.device = device
+        self.random = random
+        # Huggingface logging
+        os.environ["TOKENIZERS_PARALLELISM"] = "false"
+        os.environ["TRANSFORMERS_VERBOSITY"] = "critical"
+        self._model_cache = MemoryCache("Wav2VecBert2Embedding", "model")
+        self._extractor_cache = MemoryCache("Wav2VecBert2Embedding", "extractor")
+
+    @property
+    def model(self) -> tp.Any:
+        from transformers import Wav2Vec2BertModel
+        if self.random:
+            return self._model_cache.get(self._get_random_model)
+        else:
+            return self._model_cache.get(Wav2Vec2BertModel.from_pretrained, self.model_name)
+
+    def _get_random_model(self):
+        from transformers import Wav2Vec2BertModel, Wav2Vec2BertConfig
+        config = Wav2Vec2BertConfig.from_pretrained(self.model_name)
+        return Wav2Vec2BertModel(config)
+
+    @property
+    def feature_extractor(self) -> tp.Any:
+        # from transformers import SeamlessM4TFeatureExtractor
+        # return self._extractor_cache.get(SeamlessM4TFeatureExtractor.from_pretrained, self.model_name)
+        from transformers import AutoFeatureExtractor
+        return self._extractor_cache.get(AutoFeatureExtractor.from_pretrained, self.model_name)
+
+    def _preprocess_wav(self, filepath: Union[Path, str],
+                        start: float, stop: float) -> torch.Tensor:
+        wav, sr = _extract_wav_part(filepath, start, stop)
+        logger.debug(
+            "Preprocessing Wav on %s, start %.1f, stop %.1f, duration %.1f",
+            filepath, start, stop, stop - start)
+        wav = torch.mean(wav, dim=0)  # stereo to mono
+        model_sr = self.feature_extractor.sampling_rate
+        wav = julius.resample.ResampleFrac(old_sr=int(sr), new_sr=model_sr)(wav)
+
+        # [1, T]
+        out = self.feature_extractor(wav,
+                                     return_tensors="pt",
+                                     sampling_rate=model_sr,
+                                     do_normalize=self.normalized).input_features
+        return out
+
+    def _compute_hidden_states(
+            self, name: str, filepath: Path, start: float, stop: float,
+            layers: tp.Optional[tp.List[int]] = None) -> torch.Tensor:
+        input_values = self._preprocess_wav(filepath=filepath, start=start, stop=stop)
+
+        self.model.to(self.device)
+        self.model.eval()  # needs to be in eval mode
+        with torch.no_grad():
+            outputs = self.model(input_values.to(self.device), output_hidden_states=True)
+        out: tp.Any = outputs.get(name)
+        if isinstance(out, tuple):
+            out = torch.stack(out)
+        if layers is not None:
+            out = out[layers].mean(0)
+        return out.detach().cpu().clone().numpy()
+
+    def _get_cached_tensor(
+            self, event: events.Sound, overlap: events.DataSlice, name: str,
+            layers: tp.Optional[tp.List[int]] = None,
+    ) -> torch.Tensor:
+        outputs = self.cache.get(
+            self._compute_hidden_states, start=event.offset, stop=event.offset + event.duration,
+            filepath=event.filepath, name=name, layers=layers)
+        embd_sr = outputs.shape[-2] / event.duration
+        # safety, to make sure we extract the right dim... but maybe slow
+        if event.duration >= 0.5:
+            assert 42 < embd_sr < 52, (f"Unexpected sampling rate for embedding {embd_sr}",
+                                       event.duration, outputs.shape[-2])
+        # if the above assert fails, event duration may be inconsistent with actual wav duration
+        # or the wav2vec output sampling rate has changed.
+        # we'd need to either find a way to get the embedding sampling rate independently, or
+        # figure out the duration in another way
+        sr = Frequency(embd_sr)
+        start, stop = [sr.to_ind(x - event.start) for x in (overlap.start, overlap.stop)]
+        start = min(start, outputs.shape[-2] - 1)
+        stop = max(start + 1, stop)
+        chunk = outputs[..., start: stop, :]
+        # load into memory (probably unnecessary, but lets avoid weird issues)
+        chunk = np.array(chunk, copy=True)
+        return torch.from_numpy(chunk)
+
+    def get(self, event: events.Sound) -> torch.Tensor:
+        raise RuntimeError(f"Only get_on_overlap is available for {self.__class__.__name__}")
+
+
+class Wav2VecBert2Transformer(_BaseWav2VecBert2):
+    """Outputs the Wav2VecBert2 transformer layers
+    """
+    event_kind = "sound"
+    dimension = 1024
+
+    def __init__(self, sample_rate: Frequency,
+                 normalized: bool = True,
+                 layers: tp.Tuple[int, ...] = (14, 15, 16, 17, 18),
+                 random: bool = False,
+                 device: str = "cpu") -> None:
+        super().__init__(sample_rate=sample_rate, normalized=normalized,
+                         device=device, random=random)
+        self.layers = layers
+
+    def get_on_overlap(self, event: events.Sound, overlap: events.DataSlice) -> torch.Tensor:
+        outputs = self._get_cached_tensor(
+            event, overlap=overlap,
+            name="hidden_states", layers=list(self.layers))
+        outputs = outputs[0].transpose(0, 1)  # [1, T, D] -> [T, D] -> [D, T]
+        return F.interpolate(outputs[None], overlap.duration_ind)[0]
+
+
+class Wav2VecBert2Convolution(_BaseWav2VecBert2):
+    """Outputs the Wav2VecBert2 convolutional layers
+    """
+    event_kind = "sound"
+    dimension = 160
+
+    def get_on_overlap(self, event: events.Sound, overlap: events.DataSlice) -> torch.Tensor:
+        outputs = self._get_cached_tensor(event, overlap=overlap, name="extract_features")
+        # [1, T, D] -> [T, D] -> [D, T]
+        outputs = outputs[0].transpose(0, 1)  # [1, T, D] -> [T, D] -> [D, T]
+        out = F.interpolate(outputs[None], overlap.duration_ind)[0]
+        return out
+
+
+class Wav2VecBert2Chunk(_BaseWav2VecBert2):
+    """Outputs a chunk of the waveform compatible to be an input of Wav2VecBert2 Model"""
+
+    event_kind = "sound"
+    dimension = 1
+    model_name = "facebook/w2v-bert-2.0"
+    normalizable = False
+
+    def __init__(self, sample_rate: Frequency,
+                 normalized: bool = True,
+                 random: bool = False,
+                 device: str = "cpu") -> None:
+        # Forcing the SR to 16k for this feature (base::FeaturesBuilder()
+        # doesn't handle multiple SRs)
+        super().__init__(sample_rate=Frequency(16000), normalized=normalized,
+                         device=device, random=random)
+
+    @property
+    def feature_extractor(self) -> tp.Any:
+        # from transformers import SeamlessM4TFeatureExtractor
+        # return self._extractor_cache.get(
+        #     SeamlessM4TFeatureExtractor.from_pretrained, self.model_name
+        # )
+        from transformers import AutoFeatureExtractor
+        return self._extractor_cache.get(
+            AutoFeatureExtractor.from_pretrained, self.model_name
+        )
+
+    def get(self, event: events.Sound) -> torch.Tensor:
+        # Possible improv.: add cache here to read full .wav once (small time reduction expected)
+        wav = self._preprocess_wav(
+            filepath=event.filepath,
+            start=event.offset,
+            stop=event.offset + event.duration,
+        )
+        return wav
+
+
 def _extract_wav_part(
     filepath: Union[Path, str], onset: float, offset: float
 ) -> tp.Tuple[torch.Tensor, Frequency]:

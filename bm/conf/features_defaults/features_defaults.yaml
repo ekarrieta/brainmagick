@@ -28,3 +28,9 @@ dset:
       random: false
     Wav2VecChunk:
       device: cpu
+    Wav2VecBert2Transformer:
+      layers: [14, 15, 16, 17, 18]
+      device: cpu
+      random: false
+    Wav2VecBert2Chunk:
+      device: cpu

@@ -181,3 +181,22 @@ def test_wav2vec(cls, tmp_path: Path) -> None:
         out = feature.get_on_overlap(event, overlap)
         assert isinstance(out, torch.Tensor)
         assert out.shape == (feature.dimension, 100)
+
+
+@pytest.mark.parametrize("cls", [audio.Wav2VecBert2Convolution, audio.Wav2VecBert2Transformer])
+def test_wav2vecbert2(cls, tmp_path: Path) -> None:
+    if os.environ.get("CIRCLECI", ""):
+        pytest.skip("Models do not run in the CI")
+    wavpath = str(Path(__file__).parent.parent / "mockdata" / "one_two.wav")
+    event = events.Sound(start=1, duration=1, filepath=wavpath, modality=None, language=None)
+    overlap = events.DataSlice(
+        start=event.start + 0.1, duration=1.0, sample_rate=100, modality=None, language=None)
+    with env.temporary(cache=tmp_path):
+        feature = cls(sample_rate=Frequency(100))
+        feature.get_on_overlap(event, overlap)
+        caches = list(tmp_path.iterdir())
+        assert len(caches) == 1
+        # reload (expected to use the cache)
+        out = feature.get_on_overlap(event, overlap)
+        assert isinstance(out, torch.Tensor)
+        assert out.shape == (feature.dimension, 100)
